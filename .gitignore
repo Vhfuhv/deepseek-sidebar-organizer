@@ -1,0 +1,21 @@
+# Local IDE settings
+.idea/
+.vscode/
+
+# Local agent artifacts
+.superpowers/
+
+# Dependencies and generated artifacts
+node_modules/
+*.log
+*.tmp
+*.temp
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
