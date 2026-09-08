@@ -1,0 +1,64 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  min-width: 280px;
+  margin: 0;
+}
+
+.dsa-popup {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.dsa-popup h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.dsa-popup label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.dsa-switch-row input {
+  margin: 0;
+}
+
+.dsa-popup input[type="range"],
+.dsa-popup input[type="color"],
+.dsa-popup button {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dsa-popup input[type="color"] {
+  height: 32px;
+  padding: 2px;
+}
+
+.dsa-popup output {
+  font-variant-numeric: tabular-nums;
+}
+
+.dsa-popup p {
+  margin: 0;
+  color: #5f6368;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.dsa-popup button {
+  min-height: 32px;
+}
+
+.dsa-popup :focus-visible {
+  outline: 2px solid #2674ff;
+  outline-offset: 2px;
+}

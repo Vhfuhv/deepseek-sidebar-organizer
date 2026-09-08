@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepSeek Scroll</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="dsa-popup">
+    <h1>DeepSeek Scroll</h1>
+    <label class="dsa-switch-row" for="enabled"><span>启用增强</span><input id="enabled" type="checkbox"></label>
+    <label for="width">滚动条宽度 <output id="width-value" for="width"></output></label>
+    <input id="width" type="range" min="8" max="24" step="1">
+    <label for="thumb-color">滑块颜色</label>
+    <input id="thumb-color" type="color" value="#2674ff">
+    <label for="track-color">轨道颜色</label>
+    <input id="track-color" type="color" value="#dbe7ff">
+    <p id="preset-note">颜色会随网页深浅主题自动适配。</p>
+    <button id="reset" type="button">恢复推荐值</button>
+  </main>
+  <script src="settings.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

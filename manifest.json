@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "DeepSeek Scroll Assistant",
+  "version": "1.0.0",
+  "description": "Improves the DeepSeek chat scrollbar and adds chat navigation controls.",
+  "permissions": ["storage"],
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [{
+    "matches": ["https://chat.deepseek.com/*"],
+    "js": ["settings.js", "groups.js", "content.js"],
+    "css": ["content.css", "content-groups.css"],
+    "run_at": "document_idle"
+  }]
+}
