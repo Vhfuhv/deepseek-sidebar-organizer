@@ -1,9 +1,20 @@
 (function attachGroups(root) {
   const DEFAULTS = Object.freeze({ groups: [], memberships: {} });
   const STORAGE_VERSION = 1;
+  const GROUP_COLOR = /^#[0-9a-f]{6}$/i;
 
   function isRecord(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function normalizeColor(value) {
+    return typeof value === 'string' && GROUP_COLOR.test(value) ? value.toLowerCase() : null;
+  }
+
+  function normalizeIcon(value) {
+    if (typeof value !== 'string') return null;
+    const icon = value.trim();
+    return icon && icon.length <= 8 ? icon : null;
   }
 
   function normalizeState(value) {
@@ -14,7 +25,14 @@
     return {
       groups: groups
         .filter((group) => group && typeof group.id === 'string' && typeof group.name === 'string')
-        .map((group) => ({ id: group.id, name: group.name, collapsed: Boolean(group.collapsed) })),
+        .map((group) => ({
+          id: group.id,
+          name: group.name,
+          collapsed: Boolean(group.collapsed),
+          color: normalizeColor(group.color),
+          icon: normalizeIcon(group.icon),
+          pinned: Boolean(group.pinned)
+        })),
       memberships: Object.fromEntries(
         Object.entries(memberships)
           .filter(([groupId, chats]) => typeof groupId === 'string' && Array.isArray(chats))
@@ -54,7 +72,14 @@
       const group = operation.group;
       if (!isRecord(group) || typeof group.id !== 'string' || typeof group.name !== 'string') return next;
       if (!next.groups.some((item) => item.id === group.id)) {
-        next.groups.push({ id: group.id, name: group.name, collapsed: Boolean(group.collapsed) });
+        next.groups.push({
+          id: group.id,
+          name: group.name,
+          collapsed: Boolean(group.collapsed),
+          color: normalizeColor(group.color),
+          icon: normalizeIcon(group.icon),
+          pinned: Boolean(group.pinned)
+        });
       }
       if (operation.chat) return addChat(next, group.id, operation.chat);
       return next;
@@ -65,8 +90,44 @@
       return addChat(next, operation.groupId, operation.chat);
     }
 
+    if (operation.type === 'remove-chats') {
+      if (typeof operation.groupId !== 'string' || !Array.isArray(operation.hrefs)) return next;
+      if (!next.groups.some((group) => group.id === operation.groupId)) return next;
+      const hrefs = new Set(operation.hrefs.filter((href) => typeof href === 'string'));
+      next.memberships[operation.groupId] = (next.memberships[operation.groupId] || [])
+        .filter((chat) => !hrefs.has(chat.href));
+      return next;
+    }
+
     if (operation.type === 'remove-chat') return removeChat(next, operation.groupId, operation.href);
     if (operation.type === 'remove-group') return removeGroup(next, operation.groupId);
+
+    if (operation.type === 'reorder-groups') {
+      if (!Array.isArray(operation.groupIds)) return next;
+      const groupsById = new Map(next.groups.map((group) => [group.id, group]));
+      const ordered = [];
+      const included = new Set();
+      for (const groupId of operation.groupIds) {
+        if (typeof groupId !== 'string' || included.has(groupId)) continue;
+        const group = groupsById.get(groupId);
+        if (!group) continue;
+        ordered.push(group);
+        included.add(groupId);
+      }
+      next.groups = ordered.concat(next.groups.filter((group) => !included.has(group.id)));
+      return next;
+    }
+
+    if (operation.type === 'set-group-marker') {
+      if (typeof operation.groupId !== 'string') return next;
+      const group = next.groups.find((item) => item.id === operation.groupId);
+      if (!group) return next;
+      if (Object.prototype.hasOwnProperty.call(operation, 'color')) group.color = normalizeColor(operation.color);
+      if (Object.prototype.hasOwnProperty.call(operation, 'icon')) group.icon = normalizeIcon(operation.icon);
+      if (Object.prototype.hasOwnProperty.call(operation, 'pinned')) group.pinned = Boolean(operation.pinned);
+      if (group.pinned) next.groups = [group, ...next.groups.filter((item) => item.id !== group.id)];
+      return next;
+    }
 
     if (operation.type === 'rename-group') {
       if (typeof operation.groupId !== 'string' || typeof operation.name !== 'string') return next;

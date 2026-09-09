@@ -28,12 +28,16 @@
     groupSaveInFlight: false,
     groupOperationSequence: 0,
     groupWriterId: `writer-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    groupMenuCloseTimer: null
+    groupMenuCloseTimer: null,
+    groupMarkerGroupId: null,
+    draggingGroupId: null
   };
   const colorScheme = matchMedia('(prefers-color-scheme: dark)');
   const GROUP_STORAGE_KEY = 'dsaGroups';
   const GROUP_BACKUP_KEY = 'dsaGroupsBackup';
   const GROUP_OPERATION_PREFIX = 'dsaGroupsOp:';
+  const GROUP_OPERATION_LIMIT = 100;
+  const GROUP_ICON_OPTIONS = ['', '📁', '⭐', '💡', '📚', '🎯', '🔧', '💬', '🧪', '❤️', '⚡'];
 
   function storedGroupRecord(stored) {
     const records = [
@@ -43,15 +47,30 @@
     return records.sort((a, b) => b.revision - a.revision)[0] || groupsApi.makeStoredRecord(groupsApi.DEFAULTS);
   }
 
-  function storedGroupOperations(stored) {
+  function groupOperationEntries(stored) {
     return Object.entries(stored || {})
       .filter(([key, value]) => key.startsWith(GROUP_OPERATION_PREFIX) && value && typeof value === 'object')
       .map(([key, value]) => ({ key, value }))
       .sort((a, b) => {
         const timeDifference = (a.value.createdAt || 0) - (b.value.createdAt || 0);
         return timeDifference || a.key.localeCompare(b.key);
-      })
+      });
+  }
+
+  function storedGroupOperations(stored) {
+    return groupOperationEntries(stored)
+      .slice(-GROUP_OPERATION_LIMIT)
       .map(({ value }) => value);
+  }
+
+  function pruneGroupOperations() {
+    if (!chrome.storage.local?.get || !chrome.storage.local?.remove) return;
+    chrome.storage.local.get(null, (stored) => {
+      const obsoleteKeys = groupOperationEntries(stored)
+        .slice(0, -GROUP_OPERATION_LIMIT)
+        .map(({ key }) => key);
+      if (obsoleteKeys.length) chrome.storage.local.remove(obsoleteKeys);
+    });
   }
 
   function loadGroups() {
@@ -64,6 +83,7 @@
       state.groupStorageRevision = record.revision;
       state.groupStorageReady = true;
       renderGroups();
+      pruneGroupOperations();
     });
   }
 
@@ -101,6 +121,7 @@
         [GROUP_BACKUP_KEY]: currentRecord
       }, () => {
         state.groupSaveInFlight = false;
+        pruneGroupOperations();
         flushGroupSaves();
       });
     } catch (error) {
@@ -219,6 +240,115 @@
     applyGroupTab();
   }
 
+  function orderedGroups() {
+    return state.groupState.groups
+      .map((group, index) => ({ group, index }))
+      .sort((a, b) => Number(b.group.pinned) - Number(a.group.pinned) || a.index - b.index)
+      .map(({ group }) => group);
+  }
+
+  function reorderGroups(sourceId, targetId, before) {
+    const groups = orderedGroups();
+    const source = groups.find((group) => group.id === sourceId);
+    const target = groups.find((group) => group.id === targetId);
+    if (!source || !target || source.id === target.id || Boolean(source.pinned) !== Boolean(target.pinned)) return false;
+
+    const groupIds = groups.map((group) => group.id);
+    groupIds.splice(groupIds.indexOf(source.id), 1);
+    const targetIndex = groupIds.indexOf(target.id);
+    if (targetIndex < 0) return false;
+    groupIds.splice(before ? targetIndex : targetIndex + 1, 0, source.id);
+    if (groupIds.every((groupId, index) => groupId === groups[index]?.id)) return false;
+
+    commitGroupOperation({ type: 'reorder-groups', groupIds });
+    showGroupsTab();
+    return true;
+  }
+
+  function clearGroupDragState() {
+    const root = state.groupRoot || document.querySelector('#dsa-sidebar-groups');
+    root?.querySelectorAll?.('.dsa-group-dragging, .dsa-group-drag-over').forEach((element) => {
+      element.classList.remove('dsa-group-dragging', 'dsa-group-drag-over');
+    });
+    state.draggingGroupId = null;
+  }
+
+  function createGroupVisualMarker(group) {
+    const marker = document.createElement('span');
+    marker.className = 'dsa-group-marker';
+    const colorDot = document.createElement('span');
+    colorDot.className = 'dsa-group-color-dot';
+    colorDot.hidden = !group.color;
+    if (group.color) colorDot.style.backgroundColor = group.color;
+    const icon = document.createElement('span');
+    icon.className = 'dsa-group-icon';
+    icon.textContent = group.icon || '';
+    icon.hidden = !group.icon;
+    icon.setAttribute('aria-hidden', 'true');
+    marker.append(colorDot, icon);
+    return marker;
+  }
+
+  function updateGroupMarker(groupId, changes) {
+    if (!state.groupStorageReady) return;
+    if (commitGroupOperation({ type: 'set-group-marker', groupId, ...changes })) showGroupsTab();
+  }
+
+  function createGroupMarkerEditor(group) {
+    const editor = document.createElement('div');
+    editor.className = 'dsa-group-marker-editor';
+
+    const colorLabel = document.createElement('label');
+    colorLabel.textContent = '颜色';
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.value = group.color || '#3964fe';
+    colorInput.title = '选择分组颜色';
+    colorInput.addEventListener('change', () => updateGroupMarker(group.id, { color: colorInput.value }));
+    colorLabel.append(colorInput);
+
+    const clearColor = document.createElement('button');
+    clearColor.type = 'button';
+    clearColor.className = 'dsa-group-marker-clear';
+    clearColor.textContent = '清除颜色';
+    clearColor.addEventListener('click', () => updateGroupMarker(group.id, { color: null }));
+
+    const iconLabel = document.createElement('label');
+    iconLabel.textContent = '图标';
+    const iconSelect = document.createElement('select');
+    iconSelect.setAttribute('aria-label', '选择分组图标');
+    for (const icon of GROUP_ICON_OPTIONS) {
+      const option = document.createElement('option');
+      option.value = icon;
+      option.textContent = icon || '无图标';
+      iconSelect.append(option);
+    }
+    iconSelect.value = group.icon || '';
+    iconSelect.addEventListener('change', () => updateGroupMarker(group.id, { icon: iconSelect.value || null }));
+    iconLabel.append(iconSelect);
+
+    const pinLabel = document.createElement('label');
+    pinLabel.className = 'dsa-group-pin-toggle';
+    const pinInput = document.createElement('input');
+    pinInput.type = 'checkbox';
+    pinInput.checked = Boolean(group.pinned);
+    pinInput.addEventListener('change', () => updateGroupMarker(group.id, { pinned: pinInput.checked }));
+    pinLabel.append(pinInput, '置顶');
+
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'dsa-group-marker-done';
+    done.textContent = '完成';
+    done.addEventListener('click', () => {
+      state.groupMarkerGroupId = null;
+      renderGroups();
+      showGroupsTab();
+    });
+
+    editor.append(colorLabel, clearColor, iconLabel, pinLabel, done);
+    return editor;
+  }
+
   function findTimelines() {
     return [...new Set([...document.querySelectorAll('a[href^="/a/chat/s/"]')]
       .filter((link) => !link.closest?.('#dsa-sidebar-groups'))
@@ -228,6 +358,68 @@
 
   function chatFromLink(link) {
     return { href: link.getAttribute('href'), title: link.querySelector('.c08e6e93')?.innerText || link.innerText.trim() || '未命名对话' };
+  }
+
+  function officialChatHrefs() {
+    return new Set([...document.querySelectorAll('a[href^="/a/chat/s/"]')]
+      .filter((link) => !link.closest?.('#dsa-sidebar-groups'))
+      .map((link) => link.getAttribute('href'))
+      .filter(Boolean));
+  }
+
+  function missingGroupChats() {
+    const availableHrefs = officialChatHrefs();
+    if (!availableHrefs.size) return new Map();
+    const missing = new Map();
+    for (const group of orderedGroups()) {
+      const chats = (state.groupState.memberships[group.id] || [])
+        .filter((chat) => !availableHrefs.has(chat.href));
+      if (chats.length) missing.set(group.id, chats);
+    }
+    return missing;
+  }
+
+  function updateGroupChatStatus() {
+    const root = document.querySelector('#dsa-sidebar-groups');
+    if (!root) return;
+    const missing = missingGroupChats();
+    const missingHrefs = new Set([...missing.values()].flat().map((chat) => chat.href));
+    for (const item of root.querySelectorAll('.dsa-group-chat[data-dsa-chat-href]')) {
+      const href = item.getAttribute('data-dsa-chat-href');
+      const isMissing = missingHrefs.has(href);
+      item.classList.toggle('dsa-group-chat-missing', isMissing);
+      const link = item.querySelector('a');
+      if (link) link.title = isMissing ? '当前未在官方侧边栏中找到，可能已删除或尚未加载' : '';
+      let status = item.querySelector('.dsa-group-chat-status');
+      if (isMissing && !status) {
+        status = document.createElement('span');
+        status.className = 'dsa-group-chat-status';
+        status.textContent = '未找到';
+        item.append(status);
+      } else if (!isMissing) {
+        status?.remove();
+      }
+    }
+
+    const cleanup = root.querySelector('.dsa-cleanup-missing');
+    if (!cleanup) return;
+    const count = [...missing.values()].reduce((total, chats) => total + chats.length, 0);
+    cleanup.disabled = count === 0;
+    cleanup.textContent = count ? `清理未找到 (${count})` : '清理未找到';
+    cleanup.title = count
+      ? '清理当前未在官方侧边栏中找到的会话；未加载完整时请稍后再操作'
+      : '当前没有发现未找到的会话';
+  }
+
+  function cleanupMissingChats() {
+    const missing = missingGroupChats();
+    const count = [...missing.values()].reduce((total, chats) => total + chats.length, 0);
+    if (!count) return;
+    if (!confirm(`发现 ${count} 条会话当前未在官方侧边栏中找到。它们也可能只是尚未加载完整，确定清理吗？`)) return;
+    for (const [groupId, chats] of missing) {
+      commitGroupOperation({ type: 'remove-chats', groupId, hrefs: chats.map((chat) => chat.href) });
+    }
+    showGroupsTab();
   }
 
   function closeGroupMenu() {
@@ -416,17 +608,63 @@
     tabs.append(timeTab, groupTab);
     const list = document.createElement('div');
     list.className = 'dsa-group-list';
+    const tools = document.createElement('div');
+    tools.className = 'dsa-group-tools';
+    const cleanup = document.createElement('button');
+    cleanup.type = 'button';
+    cleanup.className = 'dsa-cleanup-missing';
+    cleanup.textContent = '清理未找到';
+    cleanup.addEventListener('click', cleanupMissingChats);
+    tools.append(cleanup);
+    list.append(tools);
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'dsa-new-group';
     add.textContent = '+ 新建分组';
     add.addEventListener('click', () => createGroupInline());
     list.append(add);
-    for (const group of state.groupState.groups) {
+    for (const group of orderedGroups()) {
       const section = document.createElement('section');
       section.className = 'dsa-group';
+      section.dataset.dsaGroupId = group.id;
+      section.classList.toggle('dsa-group-pinned', Boolean(group.pinned));
       const header = document.createElement('div');
       header.className = 'dsa-group-header';
+      const dragHandle = document.createElement('span');
+      dragHandle.className = 'dsa-group-drag-handle';
+      dragHandle.textContent = '⋮⋮';
+      dragHandle.draggable = true;
+      dragHandle.setAttribute('aria-label', '拖动调整分组顺序');
+      dragHandle.title = '拖动调整顺序';
+      dragHandle.addEventListener('dragstart', (event) => {
+        state.draggingGroupId = group.id;
+        section.classList.add('dsa-group-dragging');
+        event.dataTransfer?.setData('text/plain', group.id);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+      });
+      dragHandle.addEventListener('dragend', clearGroupDragState);
+      section.addEventListener('dragover', (event) => {
+        const sourceId = state.draggingGroupId || event.dataTransfer?.getData('text/plain');
+        const source = state.groupState.groups.find((item) => item.id === sourceId);
+        if (!source || source.id === group.id || Boolean(source.pinned) !== Boolean(group.pinned)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        list.querySelectorAll('.dsa-group-drag-over').forEach((item) => item.classList.remove('dsa-group-drag-over'));
+        section.classList.add('dsa-group-drag-over');
+      });
+      section.addEventListener('dragleave', (event) => {
+        if (!section.contains(event.relatedTarget)) section.classList.remove('dsa-group-drag-over');
+      });
+      section.addEventListener('drop', (event) => {
+        const sourceId = state.draggingGroupId || event.dataTransfer?.getData('text/plain');
+        const source = state.groupState.groups.find((item) => item.id === sourceId);
+        if (!source || source.id === group.id || Boolean(source.pinned) !== Boolean(group.pinned)) return;
+        event.preventDefault();
+        const rect = section.getBoundingClientRect();
+        reorderGroups(source.id, group.id, event.clientY < rect.top + rect.height / 2);
+        clearGroupDragState();
+      });
+      header.append(dragHandle, createGroupVisualMarker(group));
       const editing = state.editingGroupId === group.id;
       let groupNameInput = null;
       if (editing) {
@@ -452,7 +690,25 @@
       } else {
         const toggle = document.createElement('button');
         toggle.type = 'button';
-        toggle.textContent = `${group.collapsed ? '▸' : '▾'} ${group.name} (${(state.groupState.memberships[group.id] || []).length})`;
+        toggle.className = 'dsa-group-toggle';
+        toggle.title = group.name;
+        const collapse = document.createElement('span');
+        collapse.className = 'dsa-group-collapse';
+        collapse.textContent = group.collapsed ? '▸' : '▾';
+        const name = document.createElement('span');
+        name.className = 'dsa-group-name';
+        name.textContent = group.name;
+        const count = document.createElement('span');
+        count.className = 'dsa-group-count';
+        count.textContent = `(${(state.groupState.memberships[group.id] || []).length})`;
+        toggle.append(collapse, name, count);
+        if (group.pinned) {
+          const pin = document.createElement('span');
+          pin.className = 'dsa-group-pin';
+          pin.textContent = '📌';
+          pin.setAttribute('aria-label', '已置顶');
+          toggle.append(pin);
+        }
         toggle.addEventListener('click', () => {
           const current = state.groupState.groups.find((item) => item.id === group.id);
           if (!current) return;
@@ -461,8 +717,19 @@
         });
         header.append(toggle);
       }
+      const markerButton = document.createElement('button');
+      markerButton.type = 'button';
+      markerButton.className = 'dsa-group-action dsa-group-marker-action';
+      markerButton.textContent = '标记';
+      markerButton.title = '设置颜色、图标和置顶';
+      markerButton.addEventListener('click', () => {
+        state.groupMarkerGroupId = state.groupMarkerGroupId === group.id ? null : group.id;
+        renderGroups();
+        showGroupsTab();
+      });
       const rename = document.createElement('button');
       rename.type = 'button';
+      rename.className = 'dsa-group-action';
       rename.textContent = editing ? '完成' : '编辑';
       rename.addEventListener('click', () => {
         if (editing) finishGroupEditing(group.id, groupNameInput.value);
@@ -470,6 +737,7 @@
       });
       const remove = document.createElement('button');
       remove.type = 'button';
+      remove.className = 'dsa-group-action';
       remove.textContent = '删除';
       remove.addEventListener('click', () => {
         if (confirm(`删除分组“${group.name}”？不会删除 DeepSeek 对话。`)) {
@@ -477,12 +745,14 @@
           showGroupsTab();
         }
       });
-      header.append(rename, remove);
+      header.append(markerButton, rename, remove);
       section.append(header);
+      if (state.groupMarkerGroupId === group.id) section.append(createGroupMarkerEditor(group));
       if (!group.collapsed) {
         for (const chat of state.groupState.memberships[group.id] || []) {
           const item = document.createElement('div');
           item.className = 'dsa-group-chat';
+          item.dataset.dsaChatHref = chat.href;
           const link = document.createElement('a');
           link.href = chat.href;
           link.textContent = chat.title;
@@ -501,6 +771,7 @@
     }
     root.append(tabs, list);
     applyGroupTab();
+    updateGroupChatStatus();
   }
 
   function findOfficialChatLink(groupLink, href) {
@@ -723,7 +994,10 @@
       scheduleRefresh();
       addGroupMenuAction();
       if (!document.querySelector('#dsa-sidebar-groups')) renderGroups();
-      else applyGroupTab();
+      else {
+        applyGroupTab();
+        updateGroupChatStatus();
+      }
     }
   });
   state.observer.observe(document.body, { childList: true, subtree: true });
